@@ -1,0 +1,245 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Outputs": {
+    "LambdaFunc": {
+      "Description": "Lambda Fucntion ARN",
+      "Value": {
+        "Fn::GetAtt": [
+          "TiTiler",
+          "Arn"
+        ]
+      }
+    },
+    "Api": {
+      "Description": "Endpoint URL",
+      "Value": {
+        "Fn::Sub": "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/"
+      }
+    }
+  },
+  "Resources": {
+    "ServerlessHttpApiApiGatewayDefaultStage": {
+      "Type": "AWS::ApiGatewayV2::Stage",
+      "Properties": {
+        "ApiId": {
+          "Ref": "ServerlessHttpApi"
+        },
+        "AutoDeploy": true,
+        "StageName": "$default",
+        "Tags": {
+          "httpapi:createdBy": "SAM"
+        }
+      }
+    },
+    "TiTilerAPIPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "FunctionName": {
+          "Ref": "TiTiler"
+        },
+        "SourceArn": {
+          "Fn::Sub": [
+            "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${__ApiId__}/${__Stage__}/*",
+            {
+              "__Stage__": "*",
+              "__ApiId__": {
+                "Ref": "ServerlessHttpApi"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "TiTilerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Action": [
+                "sts:AssumeRole"
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "lambda.amazonaws.com"
+                ]
+              }
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          "arn:aws:iam::aws:policy/AWSLambdaExecute"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "TiTilerRolePolicy1",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:HeadObject"
+                  ],
+                  "Resource": {
+                    "Fn::Split": [
+                      ",",
+                      {
+                        "Fn::Join": [
+                          "",
+                          [
+                            "arn:aws:s3:::",
+                            {
+                              "Fn::Join": [
+                                "/*,arn:aws:s3:::",
+                                {
+                                  "Ref": "Bucket"
+                                }
+                              ]
+                            },
+                            "/*"
+                          ]
+                        ]
+                      }
+                    ]
+                  },
+                  "Effect": "Allow"
+                }
+              ]
+            }
+          }
+        ],
+        "Tags": [
+          {
+            "Value": "SAM",
+            "Key": "lambda:createdBy"
+          }
+        ]
+      }
+    },
+    "TiTiler": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Layers": [
+          {
+            "Fn::Sub": "arn:aws:lambda:${AWS::Region}:524387336408:layer:titiler-gdal33:2"
+          }
+        ],
+        "Code": {
+          "ZipFile": "import logging\nfrom mangum import Mangum\nfrom titiler.application.main import app\n\nlogging.getLogger(\"mangum.lifespan\").setLevel(logging.ERROR)\nlogging.getLogger(\"mangum.http\").setLevel(logging.ERROR)\n\nlambda_handler = Mangum(app, lifespan=\"auto\", log_level=\"error\")\n"
+        },
+        "Description": "Titiler: Dynamic tiler",
+        "Tags": [
+          {
+            "Value": "SAM",
+            "Key": "lambda:createdBy"
+          }
+        ],
+        "MemorySize": 1024,
+        "Environment": {
+          "Variables": {
+            "GDAL_DATA": "/opt/share/gdal",
+            "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.TIF,.tiff",
+            "GDAL_HTTP_MULTIPLEX": true,
+            "VSI_CACHE": true,
+            "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": true,
+            "GDAL_CACHEMAX": 200,
+            "TITILER_API_DISABLE_COG": {
+              "Ref": "DisableCOG"
+            },
+            "TITILER_API_DISABLE_MOSAIC": {
+              "Ref": "DisableMosaic"
+            },
+            "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+            "GDAL_HTTP_VERSION": 2,
+            "TITILER_API_DISABLE_STAC": {
+              "Ref": "DisableSTAC"
+            },
+            "PROJ_LIB": "/opt/share/proj",
+            "VSI_CACHE_SIZE": 5000000
+          }
+        },
+        "Handler": "index.lambda_handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "TiTilerRole",
+            "Arn"
+          ]
+        },
+        "Timeout": 10,
+        "Runtime": "python3.8"
+      }
+    },
+    "ServerlessHttpApi": {
+      "Type": "AWS::ApiGatewayV2::Api",
+      "Properties": {
+        "Body": {
+          "info": {
+            "version": "1.0",
+            "title": {
+              "Ref": "AWS::StackName"
+            }
+          },
+          "paths": {
+            "$default": {
+              "x-amazon-apigateway-any-method": {
+                "x-amazon-apigateway-integration": {
+                  "httpMethod": "POST",
+                  "type": "aws_proxy",
+                  "uri": {
+                    "Fn::Sub": "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TiTiler.Arn}/invocations"
+                  },
+                  "payloadFormatVersion": "2.0"
+                },
+                "isDefaultRoute": true,
+                "responses": {}
+              }
+            }
+          },
+          "openapi": "3.0.1",
+          "tags": [
+            {
+              "name": "httpapi:createdBy",
+              "x-amazon-apigateway-tag-value": "SAM"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Parameters": {
+    "DisableMosaic": {
+      "Default": "true",
+      "Type": "String",
+      "AllowedValues": [
+        "true",
+        "false"
+      ]
+    },
+    "DisableCOG": {
+      "Default": "false",
+      "Type": "String",
+      "AllowedValues": [
+        "true",
+        "false"
+      ]
+    },
+    "Bucket": {
+      "Default": "*",
+      "Type": "CommaDelimitedList"
+    },
+    "DisableSTAC": {
+      "Default": "true",
+      "Type": "String",
+      "AllowedValues": [
+        "true",
+        "false"
+      ]
+    }
+  }
+}
