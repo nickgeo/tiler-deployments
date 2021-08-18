@@ -1,0 +1,94 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Parameters:
+  Bucket:
+    Type: CommaDelimitedList
+    Default: '*'
+  DisableCOG:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+    - 'true'
+    - 'false'
+  DisableMosaic:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+    - 'true'
+    - 'false'
+  DisableSTAC:
+    Type: String
+    Default: 'true'
+    AllowedValues:
+    - 'true'
+    - 'false'
+Resources:
+  TiTiler:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.8
+      Handler: index.lambda_handler
+      Description: 'Titiler: Dynamic tiler'
+      Layers:
+      - Fn::Sub: arn:aws:lambda:${AWS::Region}:524387336408:layer:titiler-gdal33:2
+      InlineCode: |
+        import logging
+        from mangum import Mangum
+        from titiler.application.main import app
+
+        logging.getLogger("mangum.lifespan").setLevel(logging.ERROR)
+        logging.getLogger("mangum.http").setLevel(logging.ERROR)
+
+        lambda_handler = Mangum(app, lifespan="auto", log_level="error")
+      MemorySize: 1024
+      Timeout: 10
+      Policies:
+      - AWSLambdaExecute
+      - Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+          - s3:GetObject
+          - s3:HeadObject
+          Resource:
+            Fn::Split:
+            - ','
+            - Fn::Join:
+              - ''
+              - - 'arn:aws:s3:::'
+                - Fn::Join:
+                  - '/*,arn:aws:s3:::'
+                  - Ref: Bucket
+                - /*
+      Environment:
+        Variables:
+          GDAL_DATA: /opt/share/gdal
+          PROJ_LIB: /opt/share/proj
+          CPL_VSIL_CURL_ALLOWED_EXTENSIONS: .tif,.TIF,.tiff
+          GDAL_CACHEMAX: 200
+          GDAL_DISABLE_READDIR_ON_OPEN: EMPTY_DIR
+          GDAL_HTTP_MERGE_CONSECUTIVE_RANGES: true
+          GDAL_HTTP_MULTIPLEX: true
+          GDAL_HTTP_VERSION: 2
+          VSI_CACHE: true
+          VSI_CACHE_SIZE: 5000000
+          TITILER_API_DISABLE_COG:
+            Ref: DisableCOG
+          TITILER_API_DISABLE_STAC:
+            Ref: DisableSTAC
+          TITILER_API_DISABLE_MOSAIC:
+            Ref: DisableMosaic
+      Events:
+        API:
+          Type: HttpApi
+Outputs:
+  LambdaFunc:
+    Description: Lambda Fucntion ARN
+    Value:
+      Fn::GetAtt:
+      - TiTiler
+      - Arn
+  Api:
+    Description: Endpoint URL
+    Value:
+      Fn::Sub: https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/
